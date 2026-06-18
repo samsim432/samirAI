@@ -1,27 +1,31 @@
-# SamirAI
+# 🤖 SamirAI
 
-SamirAI is a private local AI assistant created by Samir Simkhada.
+Private Local AI Assistant powered by Ollama.
 
 ## Features
 
-- Local AI using Ollama
-- React frontend
-- Express backend
-- Multi-chat sidebar
-- Streaming responses
-- Markdown support
-- PDF and TXT upload
-- Private data stays on your computer
+- 🧠 Local AI with Ollama
+- 💬 Multi Chat Conversations
+- ⚡ Streaming Responses
+- 📄 PDF & TXT Analysis
+- 📝 Markdown Rendering
+- 🔒 Privacy First
+- 💾 Local Chat Storage
+- 🌐 Open Source
 
-## Requirements
+## Tech Stack
 
-- Node.js
-- npm
+- React + Vite
+- Node.js + Express
 - Ollama
+- Qwen 2.5
+- Multer
+- React Markdown
 
-## Install
+## Installation
+
+### Clone
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/samirAI.git
+git clone https://github.com/samsim432/samirAI.git
 cd samirAI
-./install.sh
