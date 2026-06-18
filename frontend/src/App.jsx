@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import "./index.css";
 
 const createChat = () => ({
   id: crypto.randomUUID(),
@@ -7,7 +8,8 @@ const createChat = () => ({
   messages: [
     {
       role: "assistant",
-      content: "Hi Samir 👋 I am SamirAI. Your private local AI assistant.",
+      content:
+        "Hi Samir 👋 I am **SamirAI**. Your private local AI assistant. Ask me anything.",
     },
   ],
   documentText: "",
@@ -21,20 +23,35 @@ export default function App() {
   });
 
   const [activeChatId, setActiveChatId] = useState(() => {
-    const saved = localStorage.getItem("samirAI_active_chat");
-    return saved || null;
+    return localStorage.getItem("samirAI_active_chat") || null;
   });
 
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [webSearch, setWebSearch] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
+
   const bottomRef = useRef(null);
 
   const activeChat = chats.find((chat) => chat.id === activeChatId) || chats[0];
 
+  const filteredChats = useMemo(() => {
+    const term = searchTerm.toLowerCase().trim();
+    if (!term) return chats;
+
+    return chats.filter((chat) => {
+      const lastMessage =
+        chat.messages?.[chat.messages.length - 1]?.content || "";
+      return (
+        chat.title.toLowerCase().includes(term) ||
+        lastMessage.toLowerCase().includes(term)
+      );
+    });
+  }, [chats, searchTerm]);
+
   useEffect(() => {
-    if (!activeChatId && chats[0]) {
-      setActiveChatId(chats[0].id);
-    }
+    if (!activeChatId && chats[0]) setActiveChatId(chats[0].id);
   }, [chats, activeChatId]);
 
   useEffect(() => {
@@ -48,6 +65,17 @@ export default function App() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [activeChat?.messages, loading]);
 
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth <= 900) setSidebarOpen(false);
+      if (window.innerWidth > 900) setSidebarOpen(true);
+    };
+
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const updateActiveChat = (updatedData) => {
     setChats((prev) =>
       prev.map((chat) =>
@@ -56,11 +84,37 @@ export default function App() {
     );
   };
 
-  const newChat = () => {
-    const chat = createChat();
-    setChats((prev) => [chat, ...prev]);
-    setActiveChatId(chat.id);
-  };
+const isEmptyNewChat = (chat) => {
+  if (!chat) return false;
+
+  const hasDefaultTitle = chat.title === "New Chat";
+  const hasOnlyWelcomeMessage = chat.messages?.length === 1;
+  const hasNoDocument = !chat.documentText && !chat.documentName;
+
+  return hasDefaultTitle && hasOnlyWelcomeMessage && hasNoDocument;
+};
+
+const newChat = () => {
+  const existingEmptyChat = chats.find((chat) => isEmptyNewChat(chat));
+
+  if (existingEmptyChat) {
+    setActiveChatId(existingEmptyChat.id);
+
+    if (window.innerWidth <= 900) {
+      setSidebarOpen(false);
+    }
+
+    return;
+  }
+
+  const chat = createChat();
+  setChats((prev) => [chat, ...prev]);
+  setActiveChatId(chat.id);
+
+  if (window.innerWidth <= 900) {
+    setSidebarOpen(false);
+  }
+};
 
   const deleteChat = (chatId) => {
     const remaining = chats.filter((chat) => chat.id !== chatId);
@@ -73,10 +127,7 @@ export default function App() {
     }
 
     setChats(remaining);
-
-    if (activeChatId === chatId) {
-      setActiveChatId(remaining[0].id);
-    }
+    if (activeChatId === chatId) setActiveChatId(remaining[0].id);
   };
 
   const renameChat = (chatId) => {
@@ -84,7 +135,9 @@ export default function App() {
     if (!title) return;
 
     setChats((prev) =>
-      prev.map((chat) => (chat.id === chatId ? { ...chat, title } : chat))
+      prev.map((chat) =>
+        chat.id === chatId ? { ...chat, title: title.trim() } : chat
+      )
     );
   };
 
@@ -101,30 +154,25 @@ export default function App() {
     });
   };
 
+  const openChat = (chatId) => {
+    setActiveChatId(chatId);
+
+    if (window.innerWidth <= 900) {
+      setSidebarOpen(false);
+    }
+  };
+
   const sendMessage = async () => {
     if (!message.trim() || loading) return;
 
-    const userMessage = {
-      role: "user",
-      content: message,
-    };
-
-    const assistantMessage = {
-      role: "assistant",
-      content: "",
-    };
-
-    const updatedMessages = [
-      ...activeChat.messages,
-      userMessage,
-      assistantMessage,
-    ];
+    const userMessage = { role: "user", content: message.trim() };
+    const assistantMessage = { role: "assistant", content: "", sources: [] };
 
     updateActiveChat({
-      messages: updatedMessages,
+      messages: [...activeChat.messages, userMessage, assistantMessage],
       title:
         activeChat.title === "New Chat"
-          ? userMessage.content.slice(0, 28)
+          ? userMessage.content.slice(0, 34)
           : activeChat.title,
     });
 
@@ -140,39 +188,60 @@ export default function App() {
         body: JSON.stringify({
           messages: [...activeChat.messages, userMessage],
           documentText: activeChat.documentText,
+          webSearch,
         }),
       });
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
+
       let finalReply = "";
+      let buffer = "";
+      let sources = [];
 
       while (true) {
         const { done, value } = await reader.read();
-
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        finalReply += chunk;
+        buffer += decoder.decode(value, { stream: true });
 
-        setChats((prev) =>
-          prev.map((chat) => {
-            if (chat.id !== activeChat.id) return chat;
+        const events = buffer.split("\n\n");
+        buffer = events.pop();
 
-            const newMessages = [...chat.messages];
-            newMessages[newMessages.length - 1] = {
-              role: "assistant",
-              content: finalReply,
-            };
+        for (const event of events) {
+          if (!event.startsWith("data: ")) continue;
 
-            return {
-              ...chat,
-              messages: newMessages,
-            };
-          })
-        );
+          const json = JSON.parse(event.replace("data: ", ""));
+
+          if (json.type === "sources") {
+            sources = json.sources || [];
+          }
+
+          if (json.type === "token") {
+            finalReply += json.content;
+
+            setChats((prev) =>
+              prev.map((chat) => {
+                if (chat.id !== activeChat.id) return chat;
+
+                const newMessages = [...chat.messages];
+
+                newMessages[newMessages.length - 1] = {
+                  role: "assistant",
+                  content: finalReply,
+                  sources,
+                };
+
+                return {
+                  ...chat,
+                  messages: newMessages,
+                };
+              })
+            );
+          }
+        }
       }
-    } catch (error) {
+    } catch {
       updateActiveChat({
         messages: [
           ...activeChat.messages,
@@ -194,7 +263,6 @@ export default function App() {
 
     const formData = new FormData();
     formData.append("file", file);
-
     setLoading(true);
 
     try {
@@ -227,6 +295,7 @@ export default function App() {
     }
 
     setLoading(false);
+    e.target.value = "";
   };
 
   const handleKeyDown = (e) => {
@@ -237,259 +306,262 @@ export default function App() {
   };
 
   return (
-    <div style={styles.page}>
-      <aside style={styles.sidebar}>
-        <h2 style={styles.logo}>🤖 SamirAI</h2>
+    <div className="app-shell">
+      {sidebarOpen && (
+        <button
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+          aria-label="Close sidebar"
+        />
+      )}
 
-        <button onClick={newChat} style={styles.newButton}>
-          + New Chat
-        </button>
+      <aside className={`sidebar ${sidebarOpen ? "open" : "closed"}`}>
+        <div className="sidebar-inner">
+          <div className="brand">
+            <div className="brand-icon">S</div>
 
-        <div style={styles.chatList}>
-          {chats.map((chat) => (
-            <div
-              key={chat.id}
-              style={{
-                ...styles.chatItem,
-                background:
-                  chat.id === activeChat.id
-                    ? "rgba(37,99,235,0.35)"
-                    : "rgba(255,255,255,0.05)",
-              }}
-              onClick={() => setActiveChatId(chat.id)}
+            <div className="brand-text">
+              <h1>SamirAI</h1>
+              <span>Private AI workspace</span>
+            </div>
+
+            <button
+              className="sidebar-close"
+              onClick={() => setSidebarOpen(false)}
+              aria-label="Close sidebar"
             >
-              <span style={styles.chatTitle}>{chat.title}</span>
+              ✕
+            </button>
+          </div>
 
-              <div style={styles.chatActions}>
-                <button onClick={(e) => { e.stopPropagation(); renameChat(chat.id); }}>
-                  ✏️
+          <button className="primary-btn" onClick={newChat}>
+            <span>＋</span>
+            New Chat
+          </button>
+
+          <div className="search-wrap">
+            <span>⌕</span>
+            <input
+              className="side-search"
+              placeholder="Search chats"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          <p className="section-label">Recent Chats</p>
+
+          <div className="chat-list">
+            {filteredChats.map((chat) => {
+              const lastMessage =
+                chat.messages?.[chat.messages.length - 1]?.content ||
+                "New conversation";
+
+              return (
+                <button
+                  key={chat.id}
+                  className={`chat-card ${
+                    chat.id === activeChat.id ? "active" : ""
+                  }`}
+                  onClick={() => openChat(chat.id)}
+                >
+                  <div className="chat-info">
+                    <strong>{chat.title}</strong>
+                    <span>{lastMessage.slice(0, 54)}...</span>
+                  </div>
+
+                  <div className="chat-actions">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        renameChat(chat.id);
+                      }}
+                      aria-label="Rename chat"
+                    >
+                      ✎
+                    </button>
+
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteChat(chat.id);
+                      }}
+                      aria-label="Delete chat"
+                    >
+                      ✕
+                    </button>
+                  </div>
                 </button>
-                <button onClick={(e) => { e.stopPropagation(); deleteChat(chat.id); }}>
-                  🗑️
-                </button>
+              );
+            })}
+
+            {filteredChats.length === 0 && (
+              <div className="empty-search">No chats found.</div>
+            )}
+          </div>
+
+          <div className="sidebar-bottom">
+            <button className="ghost-btn">📚 Library</button>
+            <button className="ghost-btn">🧠 Knowledge Base</button>
+            <button className="ghost-btn">⚙️ Settings</button>
+
+            <div className="user-card">
+              <div className="avatar">S</div>
+              <div>
+                <strong>Samir</strong>
+                <span>Administrator</span>
               </div>
             </div>
-          ))}
+          </div>
         </div>
       </aside>
 
-      <main style={styles.chatBox}>
-        <header style={styles.header}>
-          <div>
-            <h1 style={styles.title}>{activeChat?.title}</h1>
-            <p style={styles.subtitle}>
-              Private local AI running with Ollama
-              {activeChat?.documentName
-                ? ` • File: ${activeChat.documentName}`
-                : ""}
+      <main className="main-panel">
+        <header className="topbar">
+          <button
+            className="menu-btn"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            aria-label="Toggle sidebar"
+          >
+            {sidebarOpen ? "‹" : "☰"}
+          </button>
+
+          <div className="topbar-title">
+            <h2>{activeChat?.title}</h2>
+            <p>
+              Local • Private • Ollama
+              {activeChat?.documentName ? ` • ${activeChat.documentName}` : ""}
             </p>
           </div>
 
-          <div style={styles.headerActions}>
-            <label style={styles.uploadButton}>
-              Upload PDF/TXT
+          <div className="top-actions">
+            <button
+              className={`web-toggle ${webSearch ? "on" : "off"}`}
+              onClick={() => setWebSearch(!webSearch)}
+            >
+              {webSearch ? "🌐 Web" : "🔒 Local"}
+            </button>
+
+            <label className="upload-btn">
+              📎 Upload
               <input
                 type="file"
                 accept=".pdf,.txt"
                 onChange={uploadFile}
-                style={{ display: "none" }}
+                hidden
               />
             </label>
 
-            <button onClick={clearChat} style={styles.clearButton}>
+            <button className="clear-btn" onClick={clearChat}>
               Clear
             </button>
           </div>
         </header>
 
-        <section style={styles.messages}>
+        <section className="chat-area">
+          {activeChat?.messages.length <= 1 && (
+            <div className="welcome">
+              <div className="logo-large">S</div>
+              <h1>SamirAI</h1>
+              <p>Your private local AI assistant.</p>
+
+              <div className="suggestions">
+                <button onClick={() => setMessage("Explain AI simply")}>
+                  <strong>💡 Explain AI simply</strong>
+                  <span>Learn complex ideas in simple words.</span>
+                </button>
+
+                <button onClick={() => setMessage("Help me write code")}>
+                  <strong>💻 Help me write code</strong>
+                  <span>Debug, build, and improve projects.</span>
+                </button>
+
+                <button onClick={() => setMessage("Summarize my PDF")}>
+                  <strong>📄 Summarize my PDF</strong>
+                  <span>Upload documents and ask questions.</span>
+                </button>
+
+                <button onClick={() => setMessage("Give me content ideas")}>
+                  <strong>✍️ Give me content ideas</strong>
+                  <span>Create reels, posts, and articles.</span>
+                </button>
+              </div>
+            </div>
+          )}
+
           {activeChat?.messages.map((msg, index) => (
             <div
               key={index}
-              style={{
-                ...styles.messageRow,
-                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
-              }}
+              className={`message-row ${msg.role === "user" ? "user" : "ai"}`}
             >
-              <div
-                style={{
-                  ...styles.bubble,
-                  ...(msg.role === "user" ? styles.userBubble : styles.aiBubble),
-                }}
-              >
-                <ReactMarkdown>{msg.content}</ReactMarkdown>
+              <div className="message-avatar">
+                {msg.role === "user" ? "S" : "AI"}
+              </div>
+
+              <div className="message-block">
+                <div className="message-name">
+                  {msg.role === "user" ? "You" : "SamirAI"}
+                </div>
+
+                <div className="message-bubble">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+
+                  {msg.sources?.length > 0 && (
+                    <div className="sources-box">
+                      <p>Sources</p>
+
+                      {msg.sources.map((source) => (
+                        <a
+                          key={source.id}
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="source-link"
+                        >
+                          [{source.id}] {source.title}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           ))}
 
           {loading && (
-            <div style={styles.typing}>
-              SamirAI is typing...
+            <div className="typing-pill">
+              <span></span>
+              <span></span>
+              <span></span>
+              SamirAI is thinking
             </div>
           )}
 
           <div ref={bottomRef} />
         </section>
 
-        <footer style={styles.inputArea}>
-          <textarea
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask SamirAI..."
-            style={styles.textarea}
-          />
+        <footer className="composer-wrap">
+          <div className="composer">
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message SamirAI..."
+            />
 
-          <button onClick={sendMessage} style={styles.sendButton}>
-            Send
-          </button>
+            <div className="composer-actions">
+              <span>Enter to send • Shift + Enter for new line</span>
+              <button onClick={sendMessage} disabled={loading}>
+                {loading ? "…" : "➜"}
+              </button>
+            </div>
+          </div>
+
+          <p className="disclaimer">
+            SamirAI can make mistakes. Verify important information.
+          </p>
         </footer>
       </main>
     </div>
   );
 }
-
-const styles = {
-  page: {
-    minHeight: "100vh",
-    display: "flex",
-    background: "#020617",
-    color: "white",
-  },
-  sidebar: {
-    width: "280px",
-    padding: "16px",
-    borderRight: "1px solid rgba(255,255,255,0.12)",
-    background: "#0f172a",
-  },
-  logo: {
-    marginTop: 0,
-  },
-  newButton: {
-    width: "100%",
-    padding: "13px",
-    borderRadius: "14px",
-    border: "none",
-    background: "#22c55e",
-    fontWeight: "bold",
-    cursor: "pointer",
-  },
-  chatList: {
-    marginTop: "16px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "10px",
-  },
-  chatItem: {
-    padding: "12px",
-    borderRadius: "14px",
-    cursor: "pointer",
-    display: "flex",
-    justifyContent: "space-between",
-    gap: "8px",
-  },
-  chatTitle: {
-    overflow: "hidden",
-    whiteSpace: "nowrap",
-    textOverflow: "ellipsis",
-  },
-  chatActions: {
-    display: "flex",
-    gap: "4px",
-  },
-  chatBox: {
-    flex: 1,
-    height: "100vh",
-    display: "flex",
-    flexDirection: "column",
-  },
-  header: {
-    padding: "16px",
-    borderBottom: "1px solid rgba(255,255,255,0.1)",
-    display: "flex",
-    justifyContent: "space-between",
-    gap: "12px",
-  },
-  title: {
-    margin: 0,
-  },
-  subtitle: {
-    margin: "5px 0 0",
-    color: "#94a3b8",
-    fontSize: "14px",
-  },
-  headerActions: {
-    display: "flex",
-    gap: "8px",
-    alignItems: "center",
-  },
-  uploadButton: {
-    background: "#2563eb",
-    color: "white",
-    padding: "10px 14px",
-    borderRadius: "999px",
-    cursor: "pointer",
-    fontSize: "14px",
-  },
-  clearButton: {
-    background: "rgba(255,255,255,0.08)",
-    color: "white",
-    border: "1px solid rgba(255,255,255,0.2)",
-    padding: "10px 14px",
-    borderRadius: "999px",
-    cursor: "pointer",
-  },
-  messages: {
-    flex: 1,
-    overflowY: "auto",
-    padding: "20px",
-  },
-  messageRow: {
-    display: "flex",
-    marginBottom: "14px",
-  },
-  bubble: {
-    maxWidth: "78%",
-    padding: "14px 16px",
-    borderRadius: "18px",
-    lineHeight: "1.6",
-    whiteSpace: "pre-wrap",
-  },
-  userBubble: {
-    background: "#2563eb",
-    color: "white",
-    borderBottomRightRadius: "4px",
-  },
-  aiBubble: {
-    background: "#1e293b",
-    color: "#e5e7eb",
-    borderBottomLeftRadius: "4px",
-  },
-  typing: {
-    color: "#94a3b8",
-    fontStyle: "italic",
-  },
-  inputArea: {
-    display: "flex",
-    gap: "10px",
-    padding: "14px",
-    borderTop: "1px solid rgba(255,255,255,0.1)",
-  },
-  textarea: {
-    flex: 1,
-    height: "54px",
-    borderRadius: "14px",
-    border: "none",
-    padding: "14px",
-    fontSize: "16px",
-    resize: "none",
-  },
-  sendButton: {
-    border: "none",
-    borderRadius: "14px",
-    padding: "0 22px",
-    background: "#22c55e",
-    fontWeight: "bold",
-    cursor: "pointer",
-  },
-};
