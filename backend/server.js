@@ -19,6 +19,7 @@ app.use(express.json({ limit: "20mb" }));
 
 const PORT = process.env.PORT || 5001;
 const MODEL = process.env.OLLAMA_MODEL || "qwen2.5:7b";
+const VISION_MODEL = process.env.OLLAMA_VISION_MODEL || "llava:7b";
 const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
 const upload = multer({
@@ -265,6 +266,74 @@ app.post("/api/upload", upload.single("file"), async (req, res) => {
 
     res.json({
       text,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: error.message,
+    });
+  }
+});
+
+app.post("/api/vision", upload.single("image"), async (req, res) => {
+  try {
+    const file = req.file;
+    const { prompt } = req.body;
+
+    if (!file) {
+      return res.status(400).json({
+        error: "No image uploaded",
+      });
+    }
+
+    const allowedTypes = ["image/png", "image/jpeg", "image/jpg", "image/webp"];
+
+    if (!allowedTypes.includes(file.mimetype)) {
+      fs.unlinkSync(file.path);
+
+      return res.status(400).json({
+        error: "Only PNG, JPG, JPEG, and WEBP images are supported",
+      });
+    }
+
+    const imageBase64 = fs.readFileSync(file.path, {
+      encoding: "base64",
+    });
+
+    fs.unlinkSync(file.path);
+
+    const visionPrompt =
+      prompt ||
+      "Analyze this image carefully. Explain what you see, important details, visible text, UI issues, and useful suggestions.";
+
+    const ollamaRes = await fetch("http://localhost:11434/api/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        prompt: `
+You are SamirAI Vision, a private local image understanding assistant.
+
+Rules:
+- Explain images clearly.
+- If it is a screenshot, identify UI/UX issues and improvements.
+- If it is an error screenshot, explain the likely problem and solution.
+- If text is visible, summarize the visible text.
+- Do not claim certainty when the image is unclear.
+
+User request:
+${visionPrompt}
+`,
+        images: [imageBase64],
+        stream: false,
+      }),
+    });
+
+    const data = await ollamaRes.json();
+
+    res.json({
+      reply: data.response || "I could not analyze this image.",
     });
   } catch (error) {
     res.status(500).json({
